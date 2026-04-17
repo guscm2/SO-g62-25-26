@@ -5,8 +5,10 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
-
+#include <sys/time.h>
 #include "common.h"
+
+#define MSG_EXEC 1
 
 /* Responde ao runner via o seu FIFO privado */
 static void responder(int runner_pid, int ok, const char *dados)
@@ -56,6 +58,30 @@ int main(int argc, char *argv[])
         if (n != (ssize_t)sizeof(req)) continue;
 
         if (req.tipo == MSG_EXEC) {
+
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            
+            int log_fd = open("/tmp/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+            if (log_fd != -1) {
+                char buffer[256];
+
+                int len = snprintf(buffer, sizeof(buffer),
+                    "User=%d cmd=%d duracao=%ldms comando=\"%s\"\n",
+
+                    req.user,
+                    req.cmd,
+                    req.duracao,
+                    req.comando
+                );
+
+                write(log_fd, buffer, len);
+                close(log_fd);
+            } else {
+                perror("[controller] open log");
+            }
+
+  
             /* Por agora: autoriza sempre de imediato */
             write(STDOUT_FILENO, "[controller] autorizar exec\n", 28);
             responder(req.runner_pid, 1, "");
