@@ -115,9 +115,9 @@ O enunciado pede:
 
 | # | Tarefa | Dificuldade |
 |---|--------|-------------|
-| 1 | Fila de escalonamento | Média |
-| 2 | Query com dados reais | Baixa |
-| 3 | Log com gettimeofday | Baixa |
+| 1 | Fila de escalonamento | Média | BENJI
+| 2 | Query com dados reais | Baixa | JORDAN
+| 3 | Log com gettimeofday | Baixa | OSMOTICO
 | 4 | Shutdown gracioso | Média |
 | 6 | Pipes e redireccionamentos | Alta |
 | 5 | Concorrência com fork + memória partilhada | Alta |
