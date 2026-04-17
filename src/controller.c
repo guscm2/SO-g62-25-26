@@ -23,7 +23,8 @@ static void responder(int runner_pid, int ok, const char *dados)
 
     write(fd, &resp, sizeof(resp));
     close(fd);
-}
+}//arroz fjanfjiasndfhbusvb
+
 
 int main(int argc, char *argv[])
 {
@@ -33,7 +34,7 @@ int main(int argc, char *argv[])
     }
 
     int max_par = atoi(argv[1]);   /* usado mais tarde */
-    (void)max_par;                 /* evita warning por enquanto */
+    (void)max_par;
 
     /* Cria FIFO principal */
     if (mkfifo(FIFO_CONTROLLER, 0666) == -1 && errno != EEXIST) {
@@ -43,7 +44,10 @@ int main(int argc, char *argv[])
     write(STDOUT_FILENO, "[controller] pronto.\n", 21);
 
     int fd = open(FIFO_CONTROLLER, O_RDONLY);
-    if (fd == -1) { perror("[controller] open fifo"); return 1; }
+    if (fd == -1)
+     { perror("[controller] open fifo"); 
+        return 1; 
+    }
 
     int fd_dummy = open(FIFO_CONTROLLER, O_WRONLY);
     if (fd_dummy == -1) { perror("[controller] open dummy"); return 1; }
