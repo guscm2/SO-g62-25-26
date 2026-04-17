@@ -8,7 +8,16 @@
 #include <sys/time.h>
 #include "common.h"
 
-#define MSG_EXEC 1
+typedef struct {
+    int user_id;
+    int cmd_id;
+    int runner_pid;
+    char comando[MAX_CMD_LEN];
+    struct timeval inicio;
+} ComandoAtivo;
+
+ComandoAtivo ativos[16];
+int num_ativos = 0;
 
 /* Responde ao runner via o seu FIFO privado */
 static void responder(int runner_pid, int ok, const char *dados)
@@ -25,11 +34,10 @@ static void responder(int runner_pid, int ok, const char *dados)
 
     write(fd, &resp, sizeof(resp));
     close(fd);
-}//arroz fjanfjiasndfhbusvb
+}
 
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]){
     if (argc < 3) {
         write(STDERR_FILENO, "Uso: ./controller <parallel> <policy>\n", 38);
         return 1;
@@ -46,10 +54,7 @@ int main(int argc, char *argv[])
     write(STDOUT_FILENO, "[controller] pronto.\n", 21);
 
     int fd = open(FIFO_CONTROLLER, O_RDONLY);
-    if (fd == -1)
-     { perror("[controller] open fifo"); 
-        return 1; 
-    }
+    if (fd == -1) { perror("[controller] open fifo"); return 1; }
 
     int fd_dummy = open(FIFO_CONTROLLER, O_WRONLY);
     if (fd_dummy == -1) { perror("[controller] open dummy"); return 1; }
@@ -62,31 +67,19 @@ int main(int argc, char *argv[])
         if (n != (ssize_t)sizeof(req)) continue;
 
         if (req.tipo == MSG_EXEC) {
-
             struct timeval tv;
             gettimeofday(&tv, NULL);
-            
+
             int log_fd = open("/tmp/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
             if (log_fd != -1) {
                 char buffer[256];
-
                 int len = snprintf(buffer, sizeof(buffer),
-                    "User=%d cmd=%d duracao=%ldms comando=\"%s\"\n",
-
-                    req.user,
-                    req.cmd,
-                    req.duracao,
-                    req.comando
-                );
-
+                    "User=%d cmd=%d comando=\"%s\"\n",
+                    req.user_id, req.cmd_id, req.comando);
                 write(log_fd, buffer, len);
                 close(log_fd);
-            } else {
-                perror("[controller] open log");
             }
 
-  
-            /* Por agora: autoriza sempre de imediato */
             write(STDOUT_FILENO, "[controller] autorizar exec\n", 28);
             responder(req.runner_pid, 1, "");
 
@@ -94,8 +87,21 @@ int main(int argc, char *argv[])
             write(STDOUT_FILENO, "[controller] comando terminado\n", 31);
 
         } else if (req.tipo == MSG_QUERY) {
-            /* Por agora devolve lista vazia */
-            responder(req.runner_pid, 1, "---\nExecuting\n---\nScheduled\n");
+            char resposta[MAX_CMD_LEN * 4];
+            int pos = 0;
+
+            pos += snprintf(resposta + pos, sizeof(resposta) - pos, "---\nExecuting\n");
+
+            for (int i = 0; i < num_ativos; i++) {
+                pos += snprintf(resposta + pos, sizeof(resposta) - pos,
+                    "user-id %d - command-id %d\n",
+                    ativos[i].user_id, ativos[i].cmd_id);
+            }
+
+            pos += snprintf(resposta + pos, sizeof(resposta) - pos, "---\nScheduled\n");
+            // cenas do benji por aqui
+
+            responder(req.runner_pid, 1, resposta);
 
         } else if (req.tipo == MSG_SHUTDOWN) {
             responder(req.runner_pid, 1, "");
