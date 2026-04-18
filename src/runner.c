@@ -25,7 +25,7 @@ static void aguardar(MsgResponse *resp)
     snprintf(path, sizeof(path), FIFO_RUNNER_FMT, (int)getpid());
 
     int fd = open(path, O_RDONLY);
-    if (fd == -1) { perror("[runner] open resposta"); exit(1); }
+    if (fd == -1) { perror("[runner] open response"); exit(1); }
     read(fd, resp, sizeof(*resp));
     close(fd);
 }
@@ -51,7 +51,7 @@ static void executar(const char *cmd)
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        write(STDERR_FILENO, "Uso: ./runner -e <uid> <cmd>  |  -c  |  -s\n", 43);
+        write(STDERR_FILENO, "Usage: ./runner -e <uid> <cmd>  |  -c  |  -s\n", 46);
         return 1;
     }
 
@@ -65,7 +65,7 @@ int main(int argc, char *argv[])
     req.runner_pid = getpid();
 
     if (strcmp(argv[1], "-e") == 0) {
-        if (argc < 4) { write(STDERR_FILENO, "Faltam argumentos\n", 18); return 1; }
+        if (argc < 4) { write(STDERR_FILENO, "Missing arguments\n", 18); return 1; }
 
         req.tipo    = MSG_EXEC;
         req.user_id = atoi(argv[2]);

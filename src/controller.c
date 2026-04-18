@@ -30,7 +30,7 @@ static void responder(int runner_pid, int ok, const char *dados)
     snprintf(path, sizeof(path), FIFO_RUNNER_FMT, runner_pid);
 
     int fd = open(path, O_WRONLY);
-    if (fd == -1) { perror("[controller] open resposta"); return; }
+    if (fd == -1) { perror("[controller] open response"); return; }
 
     MsgResponse resp;
     resp.ok = ok;
@@ -48,7 +48,7 @@ void tentar_escalonar(){
         num_espera--;
         em_exec[num_exec++] = entrada;
 
-        write(STDOUT_FILENO, "[controller] comando autorizado.\n", 33);
+        write(STDOUT_FILENO, "[controller] command authorized.\n", 33);
 
         responder(entrada.runner_pid, 1, "");
     }
@@ -56,7 +56,7 @@ void tentar_escalonar(){
 
 int main(int argc, char *argv[]){
     if (argc < 3) {
-        write(STDERR_FILENO, "Uso: ./controller <parallel> <policy>\n", 38);
+        write(STDERR_FILENO, "Usage: ./controller <parallel> <policy>\n", 40);
         return 1;
     }
 
@@ -67,7 +67,7 @@ int main(int argc, char *argv[]){
         perror("[controller] mkfifo"); return 1;
     }
     /* Loop principal — por agora sequencial, uma mensagem de cada vez */
-    write(STDOUT_FILENO, "[controller] pronto.\n", 21);
+    write(STDOUT_FILENO, "[controller] ready.\n", 20);
 
     int fd = open(FIFO_CONTROLLER, O_RDONLY);
     if (fd == -1) { perror("[controller] open fifo"); return 1; }
@@ -89,18 +89,21 @@ int main(int argc, char *argv[]){
             strncpy(em_espera[num_espera].comando, req.comando, MAX_CMD_LEN-1);
             gettimeofday(&em_espera[num_espera].inicio, NULL);
             num_espera++;
-            write(STDOUT_FILENO, "[controller] comando recebido, a escalonar...\n", 46);
+            write(STDOUT_FILENO, "[controller] command received, scheduling...\n", 45);
 
             tentar_escalonar();
 
         } else if (req.tipo == MSG_DONE) {
             for(int i = 0; i < num_exec; i++){
+                if(em_exec[i].runner_pid == req.runner_pid){
                 memmove(&em_exec[i], &em_exec[i+1], sizeof(ComandoAtivo) * (num_exec - i - 1));
-                num_exec --;
+                num_exec--;
                 break;
+                }
             }
-            write(STDOUT_FILENO, "[controller] comando terminado\n", 31);
-
+            write(STDOUT_FILENO, "[controller] command finished.\n", 31);
+            tentar_escalonar();
+            
         } else if (req.tipo == MSG_QUERY) {
             char resposta[MAX_CMD_LEN * 4];
             int pos = 0;
@@ -114,7 +117,12 @@ int main(int argc, char *argv[]){
             }
 
             pos += snprintf(resposta + pos, sizeof(resposta) - pos, "---\nScheduled\n");
-            // cenas do benji por aqui
+            
+            for (int i = 0; i < num_espera; i++) {
+                pos += snprintf(resposta + pos, sizeof(resposta) - pos,
+                    "user-id %d - command-id %d\n",
+                em_espera[i].user_id, em_espera[i].cmd_id);
+            }
 
             responder(req.runner_pid, 1, resposta);
 
@@ -126,6 +134,6 @@ int main(int argc, char *argv[]){
     close(fd);
     close(fd_dummy);
     unlink(FIFO_CONTROLLER);
-    write(STDOUT_FILENO, "[controller] terminado.\n", 24);
+    write(STDOUT_FILENO, "[controller] terminated.\n", 25);
     return 0;
 }
