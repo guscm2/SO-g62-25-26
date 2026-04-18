@@ -8,6 +8,8 @@
 #include <sys/time.h>
 #include "common.h"
 
+static int max_par = 1;
+
 typedef struct {
     int user_id;
     int cmd_id;
@@ -16,8 +18,10 @@ typedef struct {
     struct timeval inicio;
 } ComandoAtivo;
 
-ComandoAtivo ativos[16];
-int num_ativos = 0;
+ComandoAtivo em_exec[MAX_QUEUE];
+ComandoAtivo em_espera[MAX_QUEUE];
+int num_exec = 0;
+int num_espera = 0;
 
 /* Responde ao runner via o seu FIFO privado */
 static void responder(int runner_pid, int ok, const char *dados)
@@ -36,6 +40,19 @@ static void responder(int runner_pid, int ok, const char *dados)
     close(fd);
 }
 
+void tentar_escalonar(){
+    while (num_exec < max_par && num_espera > 0){
+        ComandoAtivo entrada = em_espera[0];
+
+        memmove(&em_espera[0], &em_espera[1], sizeof(ComandoAtivo) * (num_espera -1));
+        num_espera--;
+        em_exec[num_exec++] = entrada;
+
+        write(STDOUT_FILENO, "[controller] comando autorizado.\n", 33);
+
+        responder(entrada.runner_pid, 1, "");
+    }
+}
 
 int main(int argc, char *argv[]){
     if (argc < 3) {
@@ -43,8 +60,7 @@ int main(int argc, char *argv[]){
         return 1;
     }
 
-    int max_par = atoi(argv[1]);   /* usado mais tarde */
-    (void)max_par;
+    max_par = atoi(argv[1]);
 
     /* Cria FIFO principal */
     if (mkfifo(FIFO_CONTROLLER, 0666) == -1 && errno != EEXIST) {
@@ -67,23 +83,22 @@ int main(int argc, char *argv[]){
         if (n != (ssize_t)sizeof(req)) continue;
 
         if (req.tipo == MSG_EXEC) {
-            struct timeval tv;
-            gettimeofday(&tv, NULL);
+            em_espera[num_espera].cmd_id = req.cmd_id;
+            em_espera[num_espera].user_id = req.user_id;
+            em_espera[num_espera].runner_pid = req.runner_pid;
+            strncpy(em_espera[num_espera].comando, req.comando, MAX_CMD_LEN-1);
+            gettimeofday(&em_espera[num_espera].inicio, NULL);
+            num_espera++;
+            write(STDOUT_FILENO, "[controller] comando recebido, a escalonar...\n", 46);
 
-            int log_fd = open("/tmp/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
-            if (log_fd != -1) {
-                char buffer[256];
-                int len = snprintf(buffer, sizeof(buffer),
-                    "User=%d cmd=%d comando=\"%s\"\n",
-                    req.user_id, req.cmd_id, req.comando);
-                write(log_fd, buffer, len);
-                close(log_fd);
-            }
-
-            write(STDOUT_FILENO, "[controller] autorizar exec\n", 28);
-            responder(req.runner_pid, 1, "");
+            tentar_escalonar();
 
         } else if (req.tipo == MSG_DONE) {
+            for(int i = 0; i < num_exec; i++){
+                memmove(&em_exec[i], &em_exec[i+1], sizeof(ComandoAtivo) * (num_exec - i - 1));
+                num_exec --;
+                break;
+            }
             write(STDOUT_FILENO, "[controller] comando terminado\n", 31);
 
         } else if (req.tipo == MSG_QUERY) {
@@ -92,10 +107,10 @@ int main(int argc, char *argv[]){
 
             pos += snprintf(resposta + pos, sizeof(resposta) - pos, "---\nExecuting\n");
 
-            for (int i = 0; i < num_ativos; i++) {
+            for (int i = 0; i < num_exec; i++) {
                 pos += snprintf(resposta + pos, sizeof(resposta) - pos,
                     "user-id %d - command-id %d\n",
-                    ativos[i].user_id, ativos[i].cmd_id);
+                    em_exec[i].user_id, em_exec[i].cmd_id);
             }
 
             pos += snprintf(resposta + pos, sizeof(resposta) - pos, "---\nScheduled\n");

@@ -5,6 +5,7 @@
 #define FIFO_RUNNER_FMT "/tmp/runner_%d"
 
 #define MAX_CMD_LEN 256
+#define MAX_QUEUE 256
 
 typedef enum {
     MSG_EXEC,
