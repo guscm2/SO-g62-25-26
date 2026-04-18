@@ -54,6 +54,30 @@ void tentar_escalonar(){
     }
 }
 
+/* Registra a linha de log em tmp/log.txt */
+static void registrar_log(const ComandoAtivo *cmd)
+{
+    struct timeval fim;
+    gettimeofday(&fim, NULL);
+ 
+    long ms = (fim.tv_sec  - cmd->inicio.tv_sec)  * 1000L
+            + (fim.tv_usec - cmd->inicio.tv_usec) / 1000L;
+ 
+    char linha[MAX_CMD_LEN + 64];
+    int len = snprintf(linha, sizeof(linha),
+        "user=%d cmd=%d duracao=%ldms comando=\"%s\"\n",
+        cmd->user_id, cmd->cmd_id, ms, cmd->comando);
+ 
+    /* Garante que a pasta tmp existe */
+    mkdir("tmp", 0755);
+ 
+    int fd = open("tmp/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd == -1) { perror("[controller] open log"); return; }
+    write(fd, linha, len);
+    close(fd);
+}
+
+
 int main(int argc, char *argv[]){
     if (argc < 3) {
         write(STDERR_FILENO, "Usage: ./controller <parallel> <policy>\n", 40);
@@ -96,14 +120,16 @@ int main(int argc, char *argv[]){
         } else if (req.tipo == MSG_DONE) {
             for(int i = 0; i < num_exec; i++){
                 if(em_exec[i].runner_pid == req.runner_pid){
+                ComandoAtivo terminado = em_exec[i];    
                 memmove(&em_exec[i], &em_exec[i+1], sizeof(ComandoAtivo) * (num_exec - i - 1));
                 num_exec--;
+                registrar_log(&terminado);
                 break;
                 }
             }
             write(STDOUT_FILENO, "[controller] command finished.\n", 31);
             tentar_escalonar();
-            
+
         } else if (req.tipo == MSG_QUERY) {
             char resposta[MAX_CMD_LEN * 4];
             int pos = 0;
