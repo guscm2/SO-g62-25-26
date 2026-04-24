@@ -13,54 +13,27 @@
 - Runner: fluxo `-e` completo (submete → aguarda autorização → executa → notifica fim)
 - Runner: fluxo `-c` e `-s` no básico (envia pedido e aguarda resposta)
 - Controller: loop sequencial a receber mensagens
-- Controller: autoriza sempre de imediato (sem fila ainda)
 - Execução de comandos simples com `fork` + `execvp`
+- **[1]** Fila de escalonamento FCFS (`em_exec[]` + `em_espera[]`), `tentar_escalonar()` chamado em MSG_EXEC e MSG_DONE
+- **[2]** Query (`-c`) responde com listas reais de `em_exec[]` e `em_espera[]`
+- **[3]** Log em `tmp/log.txt` com duração em ms via `gettimeofday` (`registrar_log()`)
 
 ---
 
 ## O que falta fazer
 
-### 1. Fila de escalonamento no controller
-**Ficheiro:** `src/controller.c`
-
-O controller atualmente autoriza sempre de imediato, ignorando `max_par`.
-É preciso manter duas listas internas:
-- `em_execucao[]` — comandos atualmente a correr (tamanho máximo = `max_par`)
-- `em_espera[]` — comandos à espera de autorização (fila FCFS)
-
-Lógica:
-- Quando chega `MSG_EXEC`: se `n_execucao < max_par`, autoriza e adiciona a `em_execucao`; caso contrário, adiciona a `em_espera` sem responder ainda
-- Quando chega `MSG_DONE`: remove de `em_execucao` e promove o primeiro de `em_espera` (se houver), respondendo-lhe agora com autorização
+### ~~1. Fila de escalonamento no controller~~ ✅ DONE
+`em_exec[]`/`em_espera[]` com FCFS, `tentar_escalonar()` chamado em MSG_EXEC e MSG_DONE.
 
 ---
 
-### 2. Resposta real ao `-c` (query)
-**Ficheiro:** `src/controller.c`  função `MSG_QUERY`
-
-Atualmente devolve sempre uma lista vazia.
-Quando chega `MSG_QUERY`, o controller deve construir uma string com:
-```
----
-Executing
-user-id 1 - command-id 98301
----
-Scheduled
-user-id 4 - command-id 97650
-```
-com base no conteúdo real de `em_execucao[]` e `em_espera[]`.
+### ~~2. Resposta real ao `-c` (query)~~ ✅ DONE
+MSG_QUERY lista `em_exec[]` (Executing) e `em_espera[]` (Scheduled).
 
 ---
 
-### 3. Registo em ficheiro com duração (`gettimeofday`)
-**Ficheiro:** `src/controller.c`
-
-Quando chega `MSG_DONE`, guardar em `tmp/log.txt` uma linha com:
-```
-user=1 cmd=98301 duracao=4321ms comando="sleep 4"
-```
-Para isso:
-- Guardar `gettimeofday` no momento em que `MSG_EXEC` chega
-- No `MSG_DONE`, calcular a diferença e escrever no ficheiro com `open` + `write`
+### ~~3. Registo em ficheiro com duração (`gettimeofday`)~~ ✅ DONE
+`registrar_log()` escreve `user=X cmd=Y duracao=Zms comando="..."` em `tmp/log.txt`.
 
 ---
 
@@ -115,9 +88,9 @@ O enunciado pede:
 
 | # | Tarefa | Dificuldade |
 |---|--------|-------------|
-| 1 | Fila de escalonamento | Média | BENJI
-| 2 | Query com dados reais | Baixa | JORDAN
-| 3 | Log com gettimeofday | Baixa | OSMOTICO
+| 1 | Fila de escalonamento | Média | ✅ DONE
+| 2 | Query com dados reais | Baixa | ✅ DONE
+| 3 | Log com gettimeofday | Baixa | ✅ DONE
 | 4 | Shutdown gracioso | Média |
 | 6 | Pipes e redireccionamentos | Alta |
 | 5 | Concorrência com fork + memória partilhada | Alta |
