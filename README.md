@@ -86,15 +86,15 @@ O enunciado pede:
 
 ## Ordem sugerida de implementação
 
-| # | Tarefa | Dificuldade |
-|---|--------|-------------|
-| 1 | Fila de escalonamento | Média | ✅ DONE
-| 2 | Query com dados reais | Baixa | ✅ DONE
-| 3 | Log com gettimeofday | Baixa | ✅ DONE
-| 4 | Shutdown gracioso | Média |
-| 6 | Pipes e redireccionamentos | Alta |
-| 5 | Concorrência com fork + memória partilhada | Alta |
-| 7 | Testes e política alternativa | Média |
+| # | Tarefa | Dificuldade | Responsável |
+|---|--------|-------------|-------------|
+| 1 | Fila de escalonamento | Média | ✅ DONE (BENJI) |
+| 2 | Query com dados reais | Baixa | ✅ DONE (JORDAN) |
+| 3 | Log com gettimeofday | Baixa | ✅ DONE (OSMOTICO) |
+| 4 | Shutdown gracioso | Média | |
+| 5 | Concorrência com fork + memória partilhada | Alta | BENJI |
+| 6 | Pipes e redireccionamentos | Alta | JORDAN |
+| 7 | Testes e política alternativa | Média | OSMOTICO |
 
 ---
 
