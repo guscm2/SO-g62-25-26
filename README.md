@@ -17,6 +17,7 @@
 - **[1]** Fila de escalonamento FCFS (`em_exec[]` + `em_espera[]`), `tentar_escalonar()` chamado em MSG_EXEC e MSG_DONE
 - **[2]** Query (`-c`) responde com listas reais de `em_exec[]` e `em_espera[]`
 - **[3]** Log em `tmp/log.txt` com duração em ms via `gettimeofday` (`registrar_log()`)
+- **[4]** Shutdown gracioso: flag `a_terminar` aguarda `num_exec == 0` antes de responder ao `-s` e sair
 
 ---
 
@@ -37,14 +38,10 @@ MSG_QUERY lista `em_exec[]` (Executing) e `em_espera[]` (Scheduled).
 
 ---
 
-### 4. Shutdown gracioso
+### ~~4. Shutdown gracioso~~ ✅ DONE
 **Ficheiro:** `src/controller.c`  caso `MSG_SHUTDOWN`
 
-Atualmente o controller termina logo ao receber `-s`, mesmo que haja runners a executar.
-O correto é:
-- Marcar uma flag `a_terminar = 1`
-- Continuar o loop até `em_execucao` estar vazio
-- Só então responder ao runner do `-s` e sair
+Flag `a_terminar` + `shutdown_pid` guardados ao receber `-s`. O loop continua a processar `MSG_DONE` até `num_exec == 0`, só então responde ao runner e termina.
 
 ---
 
@@ -91,7 +88,7 @@ O enunciado pede:
 | 1 | Fila de escalonamento | Média | ✅ DONE (BENJI) |
 | 2 | Query com dados reais | Baixa | ✅ DONE (JORDAN) |
 | 3 | Log com gettimeofday | Baixa | ✅ DONE (OSMOTICO) |
-| 4 | Shutdown gracioso | Média | |
+| 4 | Shutdown gracioso | Média | ✅ DONE (BENJI) |
 | 5 | Concorrência com fork + memória partilhada | Alta | BENJI |
 | 6 | Pipes e redireccionamentos | Alta | JORDAN |
 | 7 | Testes e política alternativa | Média | OSMOTICO |

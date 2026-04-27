@@ -9,6 +9,8 @@
 #include "common.h"
 
 static int max_par = 1;
+static int a_terminar = 0;
+static int shutdown_pid = -1;
 
 typedef struct {
     int user_id;
@@ -153,10 +155,17 @@ int main(int argc, char *argv[]){
             responder(req.runner_pid, 1, resposta);
 
         } else if (req.tipo == MSG_SHUTDOWN) {
-            responder(req.runner_pid, 1, "");
-            break;
+            a_terminar = 1;
+            shutdown_pid = req.runner_pid;
+            if (num_exec == 0) break;
+            write(STDOUT_FILENO, "[controller] shutdown pending, waiting for running commands...\n", 63);
+            continue;
         }
+
+        if (a_terminar && num_exec == 0) break;
     }
+    if (shutdown_pid != -1)
+        responder(shutdown_pid, 1, "");
     close(fd);
     close(fd_dummy);
     unlink(FIFO_CONTROLLER);
