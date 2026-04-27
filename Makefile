@@ -1,6 +1,7 @@
 CC      = gcc
 CFLAGS  = -Wall -g -Iinclude
 LDFLAGS =
+LDFLAGS_CONTROLLER = -lpthread
 
 all: folders controller runner
 
@@ -11,7 +12,7 @@ folders:
 	@mkdir -p src include obj bin tmp
 
 bin/controller: obj/controller.o
-	$(CC) $(LDFLAGS) $^ -o $@
+	$(CC) $(LDFLAGS) $(LDFLAGS_CONTROLLER) $^ -o $@
 
 bin/runner: obj/runner.o
 	$(CC) $(LDFLAGS) $^ -o $@

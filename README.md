@@ -18,6 +18,7 @@
 - **[2]** Query (`-c`) responde com listas reais de `em_exec[]` e `em_espera[]`
 - **[3]** Log em `tmp/log.txt` com duração em ms via `gettimeofday` (`registrar_log()`)
 - **[4]** Shutdown gracioso: flag `a_terminar` aguarda `num_exec == 0` antes de responder ao `-s` e sair
+- **[5]** Concorrência: `fork` por mensagem, estado em `mmap(MAP_SHARED|MAP_ANONYMOUS)`, exclusão mútua com `sem_init(pshared=1)`
 
 ---
 
@@ -45,15 +46,10 @@ Flag `a_terminar` + `shutdown_pid` guardados ao receber `-s`. O loop continua a 
 
 ---
 
-### 5. Concorrência no controller (fork por mensagem)
+### ~~5. Concorrência no controller (fork por mensagem)~~ ✅ DONE
 **Ficheiro:** `src/controller.c`
 
-Atualmente o controller é totalmente sequencial — enquanto trata uma mensagem, bloqueia todas as outras.
-Para o `-c` não bloquear os `-e` em curso, o controller deve fazer `fork` para cada mensagem recebida, tratando-a num processo filho.
-
-Atenção: as listas `em_execucao[]` e `em_espera[]` passam a ser acedidas por múltiplos processos, por isso será necessário:
-- Memória partilhada (`mmap` com `MAP_SHARED` ou `shmget`) para as listas
-- Semáforo ou mutex para acesso exclusivo (`sem_open` ou `semget`)
+`fork` por mensagem recebida; filho trata a mensagem e termina. Estado partilhado (`em_exec[]`, `em_espera[]`, flags) em `mmap(MAP_SHARED|MAP_ANONYMOUS)`; acesso exclusivo via `sem_init(sem, 1, 1)`. Parent usa `select` com timeout de 100ms para rever a condição de saída sem bloquear no `read`. MSG_QUERY responde fora do lock para não bloquear o semáforo enquanto abre o FIFO do runner.
 
 ---
 
@@ -89,7 +85,7 @@ O enunciado pede:
 | 2 | Query com dados reais | Baixa | ✅ DONE (JORDAN) |
 | 3 | Log com gettimeofday | Baixa | ✅ DONE (OSMOTICO) |
 | 4 | Shutdown gracioso | Média | ✅ DONE (BENJI) |
-| 5 | Concorrência com fork + memória partilhada | Alta | BENJI |
+| 5 | Concorrência com fork + memória partilhada | Alta | ✅ DONE (BENJI) |
 | 6 | Pipes e redireccionamentos | Alta | JORDAN |
 | 7 | Testes e política alternativa | Média | OSMOTICO |
 
