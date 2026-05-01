@@ -6,6 +6,8 @@
 
 #define MAX_CMD_LEN 256
 #define MAX_QUEUE 256
+/* worst-case query: 2 section headers + MAX_QUEUE entries × ~40 chars each */
+#define MAX_RESPONSE_LEN (MAX_QUEUE * 64)
 
 typedef enum {
     MSG_EXEC,
@@ -24,7 +26,7 @@ typedef struct {
 
 typedef struct {
     int  ok;
-    char dados[MAX_CMD_LEN * 4];
+    char dados[MAX_RESPONSE_LEN];
 } MsgResponse;
 
 #endif

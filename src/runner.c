@@ -5,16 +5,46 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <errno.h>
 
 #include "common.h"
+
+static ssize_t write_all(int fd, const void *buf, size_t n)
+{
+    size_t sent = 0;
+    while (sent < n) {
+        ssize_t r = write(fd, (const char *)buf + sent, n - sent);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        sent += r;
+    }
+    return (ssize_t)sent;
+}
+
+static ssize_t read_all(int fd, void *buf, size_t n)
+{
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, (char *)buf + got, n - got);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (r == 0) break;
+        got += r;
+    }
+    return (ssize_t)got;
+}
 
 /* Envia mensagem ao controller */
 static void enviar(MsgRequest *req)
 {
     int fd = open(FIFO_CONTROLLER, O_WRONLY);
     if (fd == -1) { perror("[runner] open controller"); exit(1); }
-    write(fd, req, sizeof(*req));
+    write_all(fd, req, sizeof(*req));
     close(fd);
 }
 
@@ -26,7 +56,7 @@ static void aguardar(MsgResponse *resp)
 
     int fd = open(path, O_RDONLY);
     if (fd == -1) { perror("[runner] open response"); exit(1); }
-    read(fd, resp, sizeof(*resp));
+    read_all(fd, resp, sizeof(*resp));
     close(fd);
 }
 
@@ -72,9 +102,18 @@ static void executar(const char *cmd)
 
         /* 3. criar pipe para o próximo segmento */
         int pipe_prox[2] = {-1, -1};
-        if (i < num_segmentos - 1) pipe(pipe_prox);
+        if (i < num_segmentos - 1 && pipe(pipe_prox) == -1) {
+            perror("[runner] pipe");
+            exit(1);
+        }
 
         pid_t pid = fork();
+        if (pid == -1) {
+            perror("[runner] fork");
+            if (pipe_prox[0] != -1) { close(pipe_prox[0]); close(pipe_prox[1]); }
+            if (pipe_ant[0] != -1)  { close(pipe_ant[0]);  close(pipe_ant[1]);  }
+            exit(1);
+        }
         if (pid == 0) {
             /* 4. ligar pipes */
             if (pipe_ant[0] != -1) {
@@ -89,14 +128,17 @@ static void executar(const char *cmd)
             /* 5. redirecionamentos — dentro do filho */
             if (redir_in) {
                 int fd = open(redir_in, O_RDONLY);
+                if (fd == -1) { perror(redir_in); _exit(1); }
                 dup2(fd, 0); close(fd);
             }
             if (redir_out) {
                 int fd = open(redir_out, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+                if (fd == -1) { perror(redir_out); _exit(1); }
                 dup2(fd, 1); close(fd);
             }
             if (redir_err) {
                 int fd = open(redir_err, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+                if (fd == -1) { perror(redir_err); _exit(1); }
                 dup2(fd, 2); close(fd);
             }
 
@@ -119,6 +161,8 @@ static void executar(const char *cmd)
 
 int main(int argc, char *argv[])
 {
+    signal(SIGPIPE, SIG_IGN);
+
     if (argc < 2) {
         write(STDERR_FILENO, "Usage: ./runner -e <uid> <cmd>  |  -c  |  -s\n", 46);
         return 1;
@@ -127,7 +171,10 @@ int main(int argc, char *argv[])
     /* Cria FIFO privado para receber resposta */
     char fifo_resp[64];
     snprintf(fifo_resp, sizeof(fifo_resp), FIFO_RUNNER_FMT, (int)getpid());
-    mkfifo(fifo_resp, 0666);
+    if (mkfifo(fifo_resp, 0666) == -1 && errno != EEXIST) {
+        perror("[runner] mkfifo");
+        return 1;
+    }
 
     MsgRequest req;
     memset(&req, 0, sizeof(req));
