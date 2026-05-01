@@ -33,19 +33,88 @@ static void aguardar(MsgResponse *resp)
 /* Executa o comando com fork + execvp */
 static void executar(const char *cmd)
 {
-    /* divide o comando em tokens */
     char buf[MAX_CMD_LEN];
     strncpy(buf, cmd, MAX_CMD_LEN - 1);
 
-    char *args[64];
-    int n = 0;
-    char *tok = strtok(buf, " ");
-    while (tok && n < 63) { args[n++] = tok; tok = strtok(NULL, " "); }
-    args[n] = NULL;
+    /* 1. partir por '|' */
+    char *segmentos[32];
+    int num_segmentos = 0;
+    segmentos[num_segmentos++] = buf;
+    for (char *p = buf; *p; p++) {
+        if (*p == '|') { *p = '\0'; segmentos[num_segmentos++] = p + 1; }
+    }
 
-    pid_t pid = fork();
-    if (pid == 0) { execvp(args[0], args); perror("[runner] execvp"); exit(1); }
-    waitpid(pid, NULL, 0);
+    int pipe_ant[2] = {-1, -1}; 
+
+    for (int i = 0; i < num_segmentos; i++) {  
+
+        /* 2. copiar segmento e tokenizar */
+        char segbuf[MAX_CMD_LEN];          
+        strncpy(segbuf, segmentos[i], MAX_CMD_LEN - 1);
+
+        char *args[64];
+        int n_args = 0;
+        char *redir_in = NULL, *redir_out = NULL, *redir_err = NULL;
+
+        char *tok = strtok(segbuf, " \t");
+        while (tok) {
+            if (strcmp(tok, "2>") == 0)          redir_err = strtok(NULL, " \t");
+            else if (strcmp(tok, ">") == 0)      redir_out = strtok(NULL, " \t");
+            else if (strcmp(tok, "<") == 0)      redir_in  = strtok(NULL, " \t");
+            else if (tok[0]=='2' && tok[1]=='>')  redir_err = tok + 2;
+            else if (tok[0]=='>' && tok[1])       redir_out = tok + 1;
+            else if (tok[0]=='<' && tok[1])       redir_in  = tok + 1;
+            else args[n_args++] = tok;
+            tok = strtok(NULL, " \t");
+        }
+        args[n_args] = NULL;
+        if (n_args == 0) continue;
+
+        /* 3. criar pipe para o próximo segmento */
+        int pipe_prox[2] = {-1, -1};
+        if (i < num_segmentos - 1) pipe(pipe_prox);
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            /* 4. ligar pipes */
+            if (pipe_ant[0] != -1) {
+                dup2(pipe_ant[0], 0);
+                close(pipe_ant[0]); close(pipe_ant[1]);
+            }
+            if (pipe_prox[1] != -1) {
+                dup2(pipe_prox[1], 1);
+                close(pipe_prox[0]); close(pipe_prox[1]);
+            }
+
+            /* 5. redirecionamentos — dentro do filho */
+            if (redir_in) {
+                int fd = open(redir_in, O_RDONLY);
+                dup2(fd, 0); close(fd);
+            }
+            if (redir_out) {
+                int fd = open(redir_out, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+                dup2(fd, 1); close(fd);
+            }
+            if (redir_err) {
+                int fd = open(redir_err, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+                dup2(fd, 2); close(fd);
+            }
+
+            execvp(args[0], args);
+            perror("[runner] execvp");
+            exit(1);
+        }  /* fim do filho */
+
+        /* pai: fechar pipe anterior e avançar */
+        if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
+        pipe_ant[0] = pipe_prox[0];
+        pipe_ant[1] = pipe_prox[1];
+
+    }  /* fim do for */
+
+    /* fechar último pipe e esperar por todos */
+    if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
+    for (int i = 0; i < num_segmentos; i++) wait(NULL);
 }
 
 int main(int argc, char *argv[])
