@@ -10,33 +10,12 @@
 
 #include "common.h"
 
-static ssize_t write_all(int fd, const void *buf, size_t n)
-{
-    size_t sent = 0;
-    while (sent < n) {
-        ssize_t r = write(fd, (const char *)buf + sent, n - sent);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        sent += r;
-    }
-    return (ssize_t)sent;
-}
+static char runner_fifo_path[64];
 
-static ssize_t read_all(int fd, void *buf, size_t n)
+static void cleanup_fifo(void)
 {
-    size_t got = 0;
-    while (got < n) {
-        ssize_t r = read(fd, (char *)buf + got, n - got);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (r == 0) break;
-        got += r;
-    }
-    return (ssize_t)got;
+    if (runner_fifo_path[0])
+        unlink(runner_fifo_path);
 }
 
 /* Envia mensagem ao controller */
@@ -60,29 +39,41 @@ static void aguardar(MsgResponse *resp)
     close(fd);
 }
 
-/* Executa o comando com fork + execvp */
-static void executar(const char *cmd)
+/* Executa o comando com fork + execvp. Retorna 0 em sucesso, -1 em erro. */
+static int executar(const char *cmd)
 {
     char buf[MAX_CMD_LEN];
     strncpy(buf, cmd, MAX_CMD_LEN - 1);
+    buf[MAX_CMD_LEN - 1] = '\0';
 
     /* 1. partir por '|' */
-    char *segmentos[32];
+    char *segmentos[MAX_PIPES];
     int num_segmentos = 0;
     segmentos[num_segmentos++] = buf;
     for (char *p = buf; *p; p++) {
-        if (*p == '|') { *p = '\0'; segmentos[num_segmentos++] = p + 1; }
+        if (*p == '|') {
+            *p = '\0';
+            if (num_segmentos >= MAX_PIPES) {
+                write(STDERR_FILENO, "[runner] too many pipe stages\n", 30);
+                return -1;
+            }
+            segmentos[num_segmentos++] = p + 1;
+        }
     }
 
-    int pipe_ant[2] = {-1, -1}; 
+    pid_t pids[MAX_PIPES];
+    int num_pids = 0;
 
-    for (int i = 0; i < num_segmentos; i++) {  
+    int pipe_ant[2] = {-1, -1};
+
+    for (int i = 0; i < num_segmentos; i++) {
 
         /* 2. copiar segmento e tokenizar */
-        char segbuf[MAX_CMD_LEN];          
+        char segbuf[MAX_CMD_LEN];
         strncpy(segbuf, segmentos[i], MAX_CMD_LEN - 1);
+        segbuf[MAX_CMD_LEN - 1] = '\0';
 
-        char *args[64];
+        char *args[MAX_ARGS];
         int n_args = 0;
         char *redir_in = NULL, *redir_out = NULL, *redir_err = NULL;
 
@@ -94,7 +85,13 @@ static void executar(const char *cmd)
             else if (tok[0]=='2' && tok[1]=='>')  redir_err = tok + 2;
             else if (tok[0]=='>' && tok[1])       redir_out = tok + 1;
             else if (tok[0]=='<' && tok[1])       redir_in  = tok + 1;
-            else args[n_args++] = tok;
+            else {
+                if (n_args >= MAX_ARGS - 1) {
+                    write(STDERR_FILENO, "[runner] too many arguments\n", 28);
+                    goto exec_error;
+                }
+                args[n_args++] = tok;
+            }
             tok = strtok(NULL, " \t");
         }
         args[n_args] = NULL;
@@ -104,15 +101,14 @@ static void executar(const char *cmd)
         int pipe_prox[2] = {-1, -1};
         if (i < num_segmentos - 1 && pipe(pipe_prox) == -1) {
             perror("[runner] pipe");
-            exit(1);
+            goto exec_error;
         }
 
         pid_t pid = fork();
         if (pid == -1) {
             perror("[runner] fork");
             if (pipe_prox[0] != -1) { close(pipe_prox[0]); close(pipe_prox[1]); }
-            if (pipe_ant[0] != -1)  { close(pipe_ant[0]);  close(pipe_ant[1]);  }
-            exit(1);
+            goto exec_error;
         }
         if (pid == 0) {
             /* 4. ligar pipes */
@@ -144,8 +140,10 @@ static void executar(const char *cmd)
 
             execvp(args[0], args);
             perror("[runner] execvp");
-            exit(1);
+            _exit(1);
         }  /* fim do filho */
+
+        pids[num_pids++] = pid;
 
         /* pai: fechar pipe anterior e avançar */
         if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
@@ -156,7 +154,24 @@ static void executar(const char *cmd)
 
     /* fechar último pipe e esperar por todos */
     if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
-    for (int i = 0; i < num_segmentos; i++) wait(NULL);
+    for (int i = 0; i < num_pids; i++) {
+        int status;
+        waitpid(pids[i], &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            char warnbuf[64];
+            int wlen = snprintf(warnbuf, sizeof(warnbuf),
+                "[runner] stage %d exited with status %d\n",
+                i, WEXITSTATUS(status));
+            if (wlen > 0 && wlen <= (int)sizeof(warnbuf))
+                write(STDERR_FILENO, warnbuf, wlen);
+        }
+    }
+    return 0;
+
+exec_error:
+    if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
+    for (int i = 0; i < num_pids; i++) { kill(pids[i], SIGTERM); waitpid(pids[i], NULL, 0); }
+    return -1;
 }
 
 int main(int argc, char *argv[])
@@ -169,12 +184,12 @@ int main(int argc, char *argv[])
     }
 
     /* Cria FIFO privado para receber resposta */
-    char fifo_resp[64];
-    snprintf(fifo_resp, sizeof(fifo_resp), FIFO_RUNNER_FMT, (int)getpid());
-    if (mkfifo(fifo_resp, 0666) == -1 && errno != EEXIST) {
+    snprintf(runner_fifo_path, sizeof(runner_fifo_path), FIFO_RUNNER_FMT, (int)getpid());
+    if (mkfifo(runner_fifo_path, 0666) == -1 && errno != EEXIST) {
         perror("[runner] mkfifo");
         return 1;
     }
+    atexit(cleanup_fifo);
 
     MsgRequest req;
     memset(&req, 0, sizeof(req));
@@ -187,10 +202,13 @@ int main(int argc, char *argv[])
         req.user_id = atoi(argv[2]);
         req.cmd_id  = getpid();   /* PID como id único por agora */
 
-        /* junta o comando numa string */
+        /* Bug 7: use snprintf-offset accumulation to avoid strncat underflow
+         * when the buffer is already full. */
+        int off = 0;
         for (int i = 3; i < argc; i++) {
-            if (i > 3) strncat(req.comando, " ", sizeof(req.comando) - strlen(req.comando) - 1);
-            strncat(req.comando, argv[i], sizeof(req.comando) - strlen(req.comando) - 1);
+            if (off >= (int)sizeof(req.comando)) break;
+            off += snprintf(req.comando + off, sizeof(req.comando) - off,
+                            "%s%s", (i > 3 ? " " : ""), argv[i]);
         }
 
         char buf[64];
@@ -236,6 +254,5 @@ int main(int argc, char *argv[])
         write(STDOUT_FILENO, "[runner] controller exited.\n", 28);
     }
 
-    unlink(fifo_resp);
     return 0;
 }

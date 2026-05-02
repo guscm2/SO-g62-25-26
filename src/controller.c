@@ -32,36 +32,27 @@ typedef struct {
 
 static EstadoPartilhado st;
 
-/* Loop until exactly n bytes are read; returns n on success, <n on EOF/error. */
-static ssize_t read_all(int fd, void *buf, size_t n)
-{
-    size_t got = 0;
-    while (got < n) {
-        ssize_t r = read(fd, (char *)buf + got, n - got);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (r == 0) break; /* EOF */
-        got += r;
-    }
-    return (ssize_t)got;
-}
 
 static void responder(int runner_pid, int ok, const char *dados)
 {
     char path[64];
     snprintf(path, sizeof(path), FIFO_RUNNER_FMT, runner_pid);
 
-    int fd = open(path, O_WRONLY);
-    if (fd == -1) { perror("[controller] open response"); return; }
+    /* O_RDWR: never blocks, never returns ENXIO on Linux — avoids the race
+     * where the controller wins the open before the runner reaches aguardar(). */
+    int fd = open(path, O_RDWR);
+    if (fd == -1) {
+        perror("[controller] open response");
+        return;
+    }
 
     MsgResponse resp;
     resp.ok = ok;
     strncpy(resp.dados, dados ? dados : "", sizeof(resp.dados) - 1);
     resp.dados[sizeof(resp.dados) - 1] = '\0';
 
-    write(fd, &resp, sizeof(resp));
+    /* Bug 1: use write_all instead of bare write. */
+    write_all(fd, &resp, sizeof(resp));
     close(fd);
 }
 
@@ -101,10 +92,14 @@ static void registrar_log(const ComandoAtivo *cmd)
     long ms = (fim.tv_sec  - cmd->inicio.tv_sec)  * 1000L
             + (fim.tv_usec - cmd->inicio.tv_usec) / 1000L;
 
-    char linha[MAX_CMD_LEN + 64];
+    /* Bug 4: buffer sized to MAX_CMD_LEN + 128 to safely hold the full format
+     * string; clamp len before passing to write to prevent OOB read. */
+    char linha[MAX_CMD_LEN + 128];
     int len = snprintf(linha, sizeof(linha),
         "user=%d cmd=%d duracao=%ldms comando=\"%s\"\n",
         cmd->user_id, cmd->cmd_id, ms, cmd->comando);
+    if (len < 0) len = 0;
+    if (len > (int)sizeof(linha)) len = (int)sizeof(linha);
 
     int fd = open("tmp/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd == -1) { perror("[controller] open log"); return; }
@@ -115,6 +110,11 @@ static void registrar_log(const ComandoAtivo *cmd)
 static void handle_message(MsgRequest *req)
 {
     if (req->tipo == MSG_EXEC) {
+        /* Bug 3: reject when the wait queue is already full. */
+        if (st.num_espera == MAX_QUEUE) {
+            responder(req->runner_pid, 0, "queue full");
+            return;
+        }
         st.em_espera[st.num_espera].cmd_id     = req->cmd_id;
         st.em_espera[st.num_espera].user_id    = req->user_id;
         st.em_espera[st.num_espera].runner_pid = req->runner_pid;
@@ -141,20 +141,38 @@ static void handle_message(MsgRequest *req)
 
     } else if (req->tipo == MSG_QUERY) {
         char query_resp[MAX_RESPONSE_LEN];
+        query_resp[0] = '\0';
         int pos = 0;
-        pos += snprintf(query_resp + pos, sizeof(query_resp) - pos, "---\nExecuting\n");
-        for (int i = 0; i < st.num_exec; i++)
-            pos += snprintf(query_resp + pos, sizeof(query_resp) - pos,
-                "user-id %d - command-id %d\n",
+        int rem = (int)sizeof(query_resp);
+        int n;
+
+        n = snprintf(query_resp + pos, rem, "---\nExecuting\n");
+        if (n > 0 && n < rem) { pos += n; rem -= n; } else rem = 0;
+
+        for (int i = 0; i < st.num_exec && rem > 1; i++) {
+            n = snprintf(query_resp + pos, rem, "user-id %d - command-id %d\n",
                 st.em_exec[i].user_id, st.em_exec[i].cmd_id);
-        pos += snprintf(query_resp + pos, sizeof(query_resp) - pos, "---\nScheduled\n");
-        for (int i = 0; i < st.num_espera; i++)
-            pos += snprintf(query_resp + pos, sizeof(query_resp) - pos,
-                "user-id %d - command-id %d\n",
+            if (n > 0 && n < rem) { pos += n; rem -= n; } else { rem = 0; break; }
+        }
+
+        if (rem > 1) {
+            n = snprintf(query_resp + pos, rem, "---\nScheduled\n");
+            if (n > 0 && n < rem) { pos += n; rem -= n; } else rem = 0;
+        }
+
+        for (int i = 0; i < st.num_espera && rem > 1; i++) {
+            n = snprintf(query_resp + pos, rem, "user-id %d - command-id %d\n",
                 st.em_espera[i].user_id, st.em_espera[i].cmd_id);
+            if (n > 0 && n < rem) { pos += n; rem -= n; } else { rem = 0; break; }
+        }
+
         responder(req->runner_pid, 1, query_resp);
 
     } else if (req->tipo == MSG_SHUTDOWN) {
+        if (st.a_terminar) {
+            responder(req->runner_pid, 1, "");
+            return;
+        }
         st.a_terminar   = 1;
         st.shutdown_pid = req->runner_pid;
         write(STDOUT_FILENO, "[controller] shutdown pending, waiting for running commands...\n", 63);
@@ -205,7 +223,10 @@ int main(int argc, char *argv[])
 
     for (;;) {
         MsgRequest req;
-        if (read_all(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) continue;
+        ssize_t n = read_all(fd, &req, sizeof(req));
+        if (n == -1) { perror("[controller] read"); break; }
+        if (n == 0) break;
+        if (n != (ssize_t)sizeof(req)) continue;
 
         handle_message(&req);
 
