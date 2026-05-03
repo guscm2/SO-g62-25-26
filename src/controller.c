@@ -38,9 +38,9 @@ static void responder(int runner_pid, int ok, const char *dados)
     char path[64];
     snprintf(path, sizeof(path), FIFO_RUNNER_FMT, runner_pid);
 
-    /* O_RDWR: never blocks, never returns ENXIO on Linux — avoids the race
-     * where the controller wins the open before the runner reaches aguardar(). */
-    int fd = open(path, O_RDWR);
+    /* Runner opens its FIFO with O_RDWR before sending the request, so a
+     * reader is always present by the time we reach here — O_WRONLY is safe. */
+    int fd = open(path, O_WRONLY);
     if (fd == -1) {
         perror("[controller] open response");
         return;

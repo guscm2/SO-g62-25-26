@@ -27,14 +27,22 @@ static void enviar(MsgRequest *req)
     close(fd);
 }
 
-/* Aguarda resposta no FIFO privado */
-static void aguardar(MsgResponse *resp)
+/* Abre o FIFO privado para leitura ANTES de enviar o pedido.
+ * O_RDWR é não-bloqueante e mantém o write-end aberto, garantindo que o
+ * kernel não liberta o buffer do pipe mesmo que o controller escreva e
+ * feche antes de chegarmos ao read. */
+static int abrir_resposta(void)
 {
     char path[64];
     snprintf(path, sizeof(path), FIFO_RUNNER_FMT, (int)getpid());
-
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDWR);
     if (fd == -1) { perror("[runner] open response"); exit(1); }
+    return fd;
+}
+
+/* Lê a resposta do FIFO já aberto e fecha-o. */
+static void aguardar(MsgResponse *resp, int fd)
+{
     read_all(fd, resp, sizeof(*resp));
     close(fd);
 }
@@ -215,11 +223,12 @@ int main(int argc, char *argv[])
         snprintf(buf, sizeof(buf), "[runner] command %d submitted\n", req.cmd_id);
         write(STDOUT_FILENO, buf, strlen(buf));
 
-        /* pede autorização */
+        /* abre FIFO de resposta ANTES de enviar — elimina a race condition */
+        int resp_fd = abrir_resposta();
         enviar(&req);
 
         MsgResponse resp;
-        aguardar(&resp);   /* bloqueia até o controller autorizar */
+        aguardar(&resp, resp_fd);   /* bloqueia até o controller autorizar */
 
         snprintf(buf, sizeof(buf), "[runner] executing command %d...\n", req.cmd_id);
         write(STDOUT_FILENO, buf, strlen(buf));
@@ -235,21 +244,23 @@ int main(int argc, char *argv[])
 
     } else if (strcmp(argv[1], "-c") == 0) {
         req.tipo = MSG_QUERY;
+        int resp_fd = abrir_resposta();
         enviar(&req);
 
         MsgResponse resp;
-        aguardar(&resp);
+        aguardar(&resp, resp_fd);
         write(STDOUT_FILENO, resp.dados, strlen(resp.dados));
 
     } else if (strcmp(argv[1], "-s") == 0) {
         req.tipo = MSG_SHUTDOWN;
+        int resp_fd = abrir_resposta();
         enviar(&req);
 
         write(STDOUT_FILENO, "[runner] sent shutdown notification\n", 36);
         write(STDOUT_FILENO, "[runner] waiting for controller to shutdown...\n", 47);
 
         MsgResponse resp;
-        aguardar(&resp);
+        aguardar(&resp, resp_fd);
 
         write(STDOUT_FILENO, "[runner] controller exited.\n", 28);
     }
