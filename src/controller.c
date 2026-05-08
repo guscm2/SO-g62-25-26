@@ -11,6 +11,7 @@
 
 static int max_par = 1;
 static int sched_policy = 0; /* 0 = FCFS, 1 = Round-Robin per user */
+static char log_path[64];
 
 typedef struct {
     int user_id;
@@ -101,7 +102,7 @@ static void registrar_log(const ComandoAtivo *cmd)
     if (len < 0) len = 0;
     if (len > (int)sizeof(linha)) len = (int)sizeof(linha);
 
-    int fd = open("tmp/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd == -1) { perror("[controller] open log"); return; }
     write(fd, linha, len);
     close(fd);
@@ -198,6 +199,14 @@ int main(int argc, char *argv[])
     if (sched_policy != 0 && sched_policy != 1) {
         write(STDERR_FILENO, "policy must be 0 (FCFS) or 1 (Round-Robin)\n", 43);
         return 1;
+    }
+
+    {
+        const char *label = (sched_policy == 0) ? "fcfs" : "rr";
+        int n = 1;
+        do {
+            snprintf(log_path, sizeof(log_path), "tmp/log_%s_%d.txt", label, n++);
+        } while (access(log_path, F_OK) == 0);
     }
 
     memset(&st, 0, sizeof(st));
