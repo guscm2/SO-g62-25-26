@@ -18,7 +18,6 @@ static void cleanup_fifo(void)
         unlink(runner_fifo_path);
 }
 
-/* Envia mensagem ao controller */
 static void enviar(MsgRequest *req)
 {
     int fd = open(FIFO_CONTROLLER, O_WRONLY);
@@ -27,10 +26,6 @@ static void enviar(MsgRequest *req)
     close(fd);
 }
 
-/* Abre o FIFO privado para leitura ANTES de enviar o pedido.
- * O_RDWR é não-bloqueante e mantém o write-end aberto, garantindo que o
- * kernel não liberta o buffer do pipe mesmo que o controller escreva e
- * feche antes de chegarmos ao read. */
 static int abrir_resposta(void)
 {
     char path[64];
@@ -40,14 +35,12 @@ static int abrir_resposta(void)
     return fd;
 }
 
-/* Lê a resposta do FIFO já aberto e fecha-o. */
 static void aguardar(MsgResponse *resp, int fd)
 {
     read_all(fd, resp, sizeof(*resp));
     close(fd);
 }
 
-/* Executa o comando com fork + execvp. Retorna 0 em sucesso, -1 em erro. */
 static int executar(const char *cmd)
 {
     char buf[MAX_CMD_LEN];
@@ -76,7 +69,6 @@ static int executar(const char *cmd)
 
     for (int i = 0; i < num_segmentos; i++) {
 
-        /* 2. copiar segmento e tokenizar */
         char segbuf[MAX_CMD_LEN];
         strncpy(segbuf, segmentos[i], MAX_CMD_LEN - 1);
         segbuf[MAX_CMD_LEN - 1] = '\0';
@@ -105,7 +97,6 @@ static int executar(const char *cmd)
         args[n_args] = NULL;
         if (n_args == 0) continue;
 
-        /* 3. criar pipe para o próximo segmento */
         int pipe_prox[2] = {-1, -1};
         if (i < num_segmentos - 1 && pipe(pipe_prox) == -1) {
             perror("[runner] pipe");
@@ -119,7 +110,6 @@ static int executar(const char *cmd)
             goto exec_error;
         }
         if (pid == 0) {
-            /* 4. ligar pipes */
             if (pipe_ant[0] != -1) {
                 dup2(pipe_ant[0], 0);
                 close(pipe_ant[0]); close(pipe_ant[1]);
@@ -129,7 +119,6 @@ static int executar(const char *cmd)
                 close(pipe_prox[0]); close(pipe_prox[1]);
             }
 
-            /* 5. redirecionamentos — dentro do filho */
             if (redir_in) {
                 int fd = open(redir_in, O_RDONLY);
                 if (fd == -1) { perror(redir_in); _exit(1); }
@@ -149,18 +138,16 @@ static int executar(const char *cmd)
             execvp(args[0], args);
             perror("[runner] execvp");
             _exit(1);
-        }  /* fim do filho */
+        }
 
         pids[num_pids++] = pid;
 
-        /* pai: fechar pipe anterior e avançar */
         if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
         pipe_ant[0] = pipe_prox[0];
         pipe_ant[1] = pipe_prox[1];
 
-    }  /* fim do for */
+    }
 
-    /* fechar último pipe e esperar por todos */
     if (pipe_ant[0] != -1) { close(pipe_ant[0]); close(pipe_ant[1]); }
     for (int i = 0; i < num_pids; i++) {
         int status;
@@ -191,7 +178,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Cria FIFO privado para receber resposta */
     snprintf(runner_fifo_path, sizeof(runner_fifo_path), FIFO_RUNNER_FMT, (int)getpid());
     if (mkfifo(runner_fifo_path, 0666) == -1 && errno != EEXIST) {
         perror("[runner] mkfifo");
@@ -208,10 +194,7 @@ int main(int argc, char *argv[])
 
         req.tipo    = MSG_EXEC;
         req.user_id = atoi(argv[2]);
-        req.cmd_id  = getpid();   /* PID como id único por agora */
-
-        /* Bug 7: use snprintf-offset accumulation to avoid strncat underflow
-         * when the buffer is already full. */
+        req.cmd_id  = getpid();
         int off = 0;
         for (int i = 3; i < argc; i++) {
             if (off >= (int)sizeof(req.comando)) break;
@@ -223,24 +206,22 @@ int main(int argc, char *argv[])
         snprintf(buf, sizeof(buf), "[runner] command %d submitted\n", req.cmd_id);
         write(STDOUT_FILENO, buf, strlen(buf));
 
-        /* abre FIFO de resposta ANTES de enviar — elimina a race condition */
         int resp_fd = abrir_resposta();
         enviar(&req);
 
         MsgResponse resp;
-        aguardar(&resp, resp_fd);   /* bloqueia até o controller autorizar */
+        aguardar(&resp, resp_fd);
 
         snprintf(buf, sizeof(buf), "[runner] executing command %d...\n", req.cmd_id);
         write(STDOUT_FILENO, buf, strlen(buf));
 
         executar(req.comando);
 
-        /* avisa que terminou */
-        req.tipo = MSG_DONE;
-        enviar(&req);
-
         snprintf(buf, sizeof(buf), "[runner] command %d finished\n", req.cmd_id);
         write(STDOUT_FILENO, buf, strlen(buf));
+
+        req.tipo = MSG_DONE;
+        enviar(&req);
 
     } else if (strcmp(argv[1], "-c") == 0) {
         req.tipo = MSG_QUERY;

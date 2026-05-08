@@ -10,7 +10,7 @@
 #include "common.h"
 
 static int max_par = 1;
-static int sched_policy = 0; /* 0 = FCFS, 1 = Round-Robin per user */
+static int sched_policy = 0;
 static char log_path[64];
 
 typedef struct {
@@ -28,7 +28,7 @@ typedef struct {
     int num_espera;
     int a_terminar;
     int shutdown_pid;
-    int last_user; /* user_id of the last command promoted to em_exec; -1 if none */
+    int last_user;
 } EstadoPartilhado;
 
 static EstadoPartilhado st;
@@ -39,8 +39,6 @@ static void responder(int runner_pid, int ok, const char *dados)
     char path[64];
     snprintf(path, sizeof(path), FIFO_RUNNER_FMT, runner_pid);
 
-    /* Runner opens its FIFO with O_RDWR before sending the request, so a
-     * reader is always present by the time we reach here — O_WRONLY is safe. */
     int fd = open(path, O_WRONLY);
     if (fd == -1) {
         perror("[controller] open response");
@@ -63,9 +61,6 @@ static void tentar_escalonar(void)
         int idx = 0;
 
         if (sched_policy == 1) {
-            /* Round-Robin per user: pick the first queued command whose
-             * user differs from the last scheduled user.  Falls back to
-             * idx=0 when every waiting command belongs to the same user. */
             for (int i = 0; i < st.num_espera; i++) {
                 if (st.em_espera[i].user_id != st.last_user) {
                     idx = i;
@@ -93,8 +88,6 @@ static void registrar_log(const ComandoAtivo *cmd)
     long ms = (fim.tv_sec  - cmd->inicio.tv_sec)  * 1000L
             + (fim.tv_usec - cmd->inicio.tv_usec) / 1000L;
 
-    /* Bug 4: buffer sized to MAX_CMD_LEN + 128 to safely hold the full format
-     * string; clamp len before passing to write to prevent OOB read. */
     char linha[MAX_CMD_LEN + 128];
     int len = snprintf(linha, sizeof(linha),
         "user=%d cmd=%d duracao=%ldms comando=\"%s\"\n",
@@ -111,7 +104,6 @@ static void registrar_log(const ComandoAtivo *cmd)
 static void handle_message(MsgRequest *req)
 {
     if (req->tipo == MSG_EXEC) {
-        /* Bug 3: reject when the wait queue is already full. */
         if (st.num_espera == MAX_QUEUE) {
             responder(req->runner_pid, 0, "queue full");
             return;
@@ -161,10 +153,25 @@ static void handle_message(MsgRequest *req)
             if (n > 0 && n < rem) { pos += n; rem -= n; } else rem = 0;
         }
 
-        for (int i = 0; i < st.num_espera && rem > 1; i++) {
-            n = snprintf(query_resp + pos, rem, "user-id %d - command-id %d\n",
-                st.em_espera[i].user_id, st.em_espera[i].cmd_id);
-            if (n > 0 && n < rem) { pos += n; rem -= n; } else { rem = 0; break; }
+        if (sched_policy == 1) {
+            for (int i = 0; i < st.num_espera && rem > 1; i++) {
+                if (st.em_espera[i].user_id == st.last_user) continue;
+                n = snprintf(query_resp + pos, rem, "user-id %d - command-id %d\n",
+                    st.em_espera[i].user_id, st.em_espera[i].cmd_id);
+                if (n > 0 && n < rem) { pos += n; rem -= n; } else { rem = 0; break; }
+            }
+            for (int i = 0; i < st.num_espera && rem > 1; i++) {
+                if (st.em_espera[i].user_id != st.last_user) continue;
+                n = snprintf(query_resp + pos, rem, "user-id %d - command-id %d\n",
+                    st.em_espera[i].user_id, st.em_espera[i].cmd_id);
+                if (n > 0 && n < rem) { pos += n; rem -= n; } else { rem = 0; break; }
+            }
+        } else {
+            for (int i = 0; i < st.num_espera && rem > 1; i++) {
+                n = snprintf(query_resp + pos, rem, "user-id %d - command-id %d\n",
+                    st.em_espera[i].user_id, st.em_espera[i].cmd_id);
+                if (n > 0 && n < rem) { pos += n; rem -= n; } else { rem = 0; break; }
+            }
         }
 
         responder(req->runner_pid, 1, query_resp);
@@ -183,6 +190,7 @@ static void handle_message(MsgRequest *req)
 int main(int argc, char *argv[])
 {
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
 
     if (argc < 3) {
         write(STDERR_FILENO, "Usage: ./controller <parallel> <policy>\n", 40);
@@ -226,7 +234,6 @@ int main(int argc, char *argv[])
     int fd = open(FIFO_CONTROLLER, O_RDONLY);
     if (fd == -1) { perror("[controller] open fifo"); return 1; }
 
-    /* keep one write-end open so read() blocks instead of returning EOF */
     int fd_dummy = open(FIFO_CONTROLLER, O_WRONLY);
     if (fd_dummy == -1) { perror("[controller] open dummy"); return 1; }
 
@@ -237,9 +244,16 @@ int main(int argc, char *argv[])
         if (n == 0) break;
         if (n != (ssize_t)sizeof(req)) continue;
 
-        handle_message(&req);
+        if (req.tipo == MSG_QUERY) {
+            if (fork() == 0) {
+                handle_message(&req);
+                _exit(0);
+            }
+        } else {
+            handle_message(&req);
+        }
 
-        if (st.a_terminar && st.num_exec == 0) break;
+        if (st.a_terminar && st.num_exec == 0 && st.num_espera == 0) break;
     }
 
     if (st.shutdown_pid != -1)

@@ -9,7 +9,6 @@
 
 #define MAX_CMD_LEN 256
 #define MAX_QUEUE 256
-/* worst-case query: 2 section headers + MAX_QUEUE entries × ~40 chars each */
 #define MAX_RESPONSE_LEN (MAX_QUEUE * 64)
 #define MAX_PIPES 32
 #define MAX_ARGS  64
